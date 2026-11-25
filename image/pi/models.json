@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "strata": {
+      "baseUrl": "http://host.openshell.internal:18080/v1",
+      "api": "openai-completions",
+      "apiKey": "STRATA_API_KEY",
+      "compat": { "supportsDeveloperRole": false },
+      "models": [
+        {
+          "id": "inkling-2-mini-sq-20",
+          "name": "Inkling 2 Mini (Strata, local)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 32768,
+          "maxTokens": 8192,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}

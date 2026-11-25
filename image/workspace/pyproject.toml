@@ -1,0 +1,14 @@
+[project]
+name = "scenario-workspace"
+version = "0.1.0"
+description = "Offline workspace in which a coding agent writes autoware_carla_scenario scenario packages."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Pinned at build time (Dockerfile ARG AUTOWARE_CARLA_SCENARIO_VERSION): the sandbox has no WAN, so the framework, its Codon toolchain and
+    # every wheel are resolved once at image build time.
+    "autoware-carla-scenario==@AUTOWARE_CARLA_SCENARIO_VERSION@",
+    "pytest",
+]
+
+[tool.uv]
+package = false

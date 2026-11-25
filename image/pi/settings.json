@@ -1,0 +1,5 @@
+{
+  "defaultProvider": "strata",
+  "defaultModel": "inkling-2-mini-sq-20",
+  "defaultThinkingLevel": "low"
+}

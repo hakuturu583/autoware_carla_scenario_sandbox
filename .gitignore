@@ -1,0 +1,12 @@
+image/workspace/data/
+.secrets/
+eval/results/
+__pycache__/
+eval/demo/
+runner/.venv/
+runner/carla.log
+image/workspace/docs/
+local.env
+.cache/
+.strata-data/
+runner/.venv*/

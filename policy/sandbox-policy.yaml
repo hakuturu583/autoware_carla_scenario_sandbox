@@ -1,0 +1,31 @@
+# OpenShell policy for the scenario-authoring sandbox.
+#
+# * Filesystem: the agent may write only its home/workspace (/sandbox) and /tmp.
+#   The framework venv lives in /sandbox/workspace/.venv (writable, because the
+#   agent installs its scaffolded package into it with `uv pip install -e`);
+#   the interpreter, uv, node and pi are read-only under /usr.
+# * Network: default deny (no PyPI, no GitHub, no HuggingFace). Two
+#   destinations are allowed, each for one kind of process:
+#     - the local LLM, contributed by the attached `strata` provider
+#       (strata-profile.yaml), for the pi harness (node) and curl;
+#     - the host CARLA server (rule `carla` below: RPC 2000, streaming 2001,
+#       secondary 2002, raw TCP) for the Python interpreter only, so the
+#       skills that run scenarios (debug-concrete-scenario, multirun) work.
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only: [/usr, /lib, /lib64, /bin, /sbin, /etc, /proc, /dev/urandom, /var/log]
+  read_write: [/sandbox, /tmp, /dev/null]
+landlock:
+  compatibility: hard_requirement
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+network_policies:
+  carla:
+    endpoints:
+      - { host: host.openshell.internal, port: 2000, protocol: tcp }
+      - { host: host.openshell.internal, port: 2001, protocol: tcp }
+      - { host: host.openshell.internal, port: 2002, protocol: tcp }
+    binaries:
+      - path: /usr/local/share/uv/python/**

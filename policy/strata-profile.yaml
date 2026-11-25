@@ -1,0 +1,26 @@
+# Provider profile: the host-local Strata server (Inkling 2 Mini) as the only
+# network destination of the sandbox. The real API key stays on the host;
+# the sandbox sees an opaque placeholder in STRATA_API_KEY that the OpenShell
+# proxy swaps for the real value on requests to this endpoint only.
+id: strata-local
+display_name: Strata (host-local LLM)
+description: Host-local Strata OpenAI/Anthropic-compatible API serving Inkling 2 Mini
+category: inference
+inference_capable: true
+credentials:
+  - name: api_key
+    env_vars: [STRATA_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_key]
+endpoints:
+  - host: host.openshell.internal
+    port: 18080
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries:
+  - /usr/local/bin/node
+  - /usr/bin/curl
