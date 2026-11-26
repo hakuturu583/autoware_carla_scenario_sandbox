@@ -74,6 +74,13 @@ RUN uv run scenario-new warmup_pkg --scenario warmup -o /tmp/warm \
     && uv run scenario-check scenario='warmup/*' \
     && uv pip uninstall warmup_pkg && rm -rf /tmp/warm
 
+# Warm the Scenario IR path (export_package -> offline editable install -> tests)
+# with a throwaway document, so that `validate-ir` works with UV_OFFLINE=1.
+COPY --chown=sandbox:sandbox irwarm.yaml /tmp/irwarm.yaml
+RUN SCENARIO_MAP=town10hd_opt IR_PACKAGES_DIR=/tmp/irwarm UV_OFFLINE=1 \
+       uv run python tools/validate_ir.py /tmp/irwarm.yaml \
+    && uv pip uninstall irwarm-scenario && rm -rf /tmp/irwarm /tmp/irwarm.yaml
+
 COPY --chown=sandbox:sandbox pi/ /sandbox/.pi/agent/
 
 # The CARLA server runs on the host, reached as host.openshell.internal
@@ -90,6 +97,9 @@ RUN mkdir -p .agents && cp -r .venv/lib/python3.12/site-packages/autoware_carla_
     && printf '#!/bin/sh\nexec /sandbox/workspace/.venv/bin/python /sandbox/workspace/tools/lanelet_info.py "$@"\n' > bin/lanelet-info \
     && printf '#!/bin/sh\nexec /sandbox/workspace/.venv/bin/python /sandbox/workspace/tools/validate_scenario.py "$@"\n' > bin/validate-scenario \
     && printf '#!/bin/sh\nexec /sandbox/workspace/.venv/bin/python /sandbox/workspace/tools/carla_status.py "$@"\n' > bin/carla-status \
+    && printf '#!/bin/sh\nexec /sandbox/workspace/.venv/bin/python /sandbox/workspace/tools/validate_ir.py "$@"\n' > bin/validate-ir \
+    && printf '#!/bin/sh\nexec /sandbox/workspace/.venv/bin/python /sandbox/workspace/tools/ir_catalog.py "$@"\n' > bin/ir-catalog \
+    && mkdir -p ir \
     && chmod +x bin/* && git config --global user.email sandbox@localhost && git config --global user.name sandbox \
     && git init -q && printf '.venv/\ndata/\n__pycache__/\n' > .gitignore && git add -A && git commit -qm "sandbox baseline"
 
@@ -112,7 +122,7 @@ RUN printf '%s\n' \
     && echo '. /sandbox/sandbox.env' > /sandbox/workspace/.profile \
     && echo '. /sandbox/sandbox.env' > /sandbox/workspace/.bashrc \
     && echo '. /sandbox/sandbox.env' >> /sandbox/.bashrc \
-    && printf '.venv/\ndata/\ndocs/\noutputs/\nmultirun/\n__pycache__/\n.cache/\n.pi/\n.profile\n.bashrc\n' > .gitignore && git commit -qam "ignore env files" || true
+    && printf '.venv/\ndata/\ndocs/\nir_packages/\noutputs/\nmultirun/\n__pycache__/\n.cache/\n.pi/\n.profile\n.bashrc\n' > .gitignore && git commit -qam "ignore env files" || true
 
 ENV PATH=/sandbox/workspace/bin:/sandbox/workspace/.venv/bin:/usr/local/bin:/usr/bin:/bin \
     UV_OFFLINE=1 \

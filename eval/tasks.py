@@ -227,3 +227,55 @@ SKILL_TASKS = [
         "yaml_expect": {"ego.spawn_lanelet_id": 1281},
     },
 ]
+
+# --- Scenario IR (declarative) versions of w1-w3 -----------------------------
+# Same scenarios, written as a ScenarioDocument YAML instead of a Python package.
+# Graded by `validate-ir`, the condition/action types used, a few values, and a
+# CARLA run of the exported package done by the grader (not by the agent).
+AUTONOMY_IR = (
+    "Work autonomously: do not ask me questions, make reasonable choices yourself. Read AGENTS.md first "
+    "(section \"Scenario IR\"). Do not write Python and do not run scenario-new. You are done only when "
+    "`validate-ir {doc}` prints `RESULT: PASS`."
+)
+
+IR_TASKS = [
+    {
+        "id": "i1_parked_car",
+        "doc": "ir/ir_parked_car.yaml",
+        "prompt": (
+            "Write a Scenario IR document `ir/ir_parked_car.yaml` with id `ir_parked_car` for the Town10HD_Opt map: "
+            "the ego spawns on lanelet 1281 at s=5 m with an initial speed of 20 km/h, goal lanelet 1764. A "
+            "stationary NPC vehicle (vehicle.lincoln.mkz) is parked in the ego's lane on the same lanelet, 45 m "
+            "ahead of the ego spawn. The scenario passes when the ego has come to a standstill for 2 seconds behind "
+            "the NPC, fails on any ego collision or after a 40 second timeout."
+        ),
+        "must_types": ["standstill", "collision", "timeout"],
+        "expect": {"ego.spawn.lanelet_id": 1281, "ego.spawn.s": 5.0, "npc.spawn.lanelet_id": 1281, "npc.spawn.s": 50.0},
+    },
+    {
+        "id": "i2_cut_in",
+        "doc": "ir/ir_left_cut_in.yaml",
+        "prompt": (
+            "Write a Scenario IR document `ir/ir_left_cut_in.yaml` with id `ir_left_cut_in` for the Town10HD_Opt "
+            "map: the ego spawns on lanelet 1172 at s=5 m with an initial speed of 20 km/h; its goal is lanelet 1172 "
+            "at s=90 m. An NPC vehicle (vehicle.lincoln.mkz) spawns on the lane to the ego's LEFT, lanelet 1281, at "
+            "s=20 m, and is held at 30 km/h (set_speed). 3 seconds after the start (elapsed_time trigger) the NPC "
+            "changes lane to the RIGHT into the ego's lane. The scenario passes once the NPC is on lanelet 1172, "
+            "fails on any ego collision or after a 30 second timeout."
+        ),
+        "must_types": ["set_speed", "lane_change", "elapsed_time", "entity_lane_position", "collision", "timeout"],
+        "expect": {"ego.spawn.lanelet_id": 1172, "npc.spawn.lanelet_id": 1281, "npc.spawn.s": 20.0},
+    },
+    {
+        "id": "i3_speed_cap",
+        "doc": "ir/ir_speed_cap.yaml",
+        "prompt": (
+            "Write a Scenario IR document `ir/ir_speed_cap.yaml` with id `ir_speed_cap` for the Town10HD_Opt map: "
+            "the ego spawns on lanelet 1281 at s=5 m and must reach lanelet 1764 (straight on, through the junction "
+            "ahead); the scenario passes when the ego is on lanelet 1764. It FAILS if the ego's speed ever exceeds "
+            "50 km/h, or after a 40 second timeout. Check the units of the speed condition with ir-catalog."
+        ),
+        "must_types": ["speed", "timeout"],
+        "expect": {"ego.spawn.lanelet_id": 1281, "speed.value_mps": 13.89},
+    },
+]

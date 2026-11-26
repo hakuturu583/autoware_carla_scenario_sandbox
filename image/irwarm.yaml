@@ -1,0 +1,19 @@
+# Build-time warm-up document for the Scenario IR path (not shipped to the agent).
+version: 1
+id: irwarm
+title: IR warm-up
+timeout_seconds: 30.0
+map:
+  group: town10hd_opt
+  name: Town10HD_Opt
+  source: "git+https://huggingface.co/datasets/AutowareFoundation/carla-ue5-maps@5058c6683a1077a99aa5fdca5e6ecff9d71fcfb1#autoware_maps/Town10HD_Opt"
+entities:
+- id: ego
+  kind: ego
+  spawn: {mode: fixed, lanelet_id: 1281, s: {value: 5.0}}
+  goal: {lanelet_id: 1764}
+assertions:
+  pass:
+  - {type: entity_lane_position, params: {entity: ego, lanelet_id: 1764}}
+  fail:
+  - {type: timeout, params: {timeout_seconds: 30.0}}

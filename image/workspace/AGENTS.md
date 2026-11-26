@@ -90,3 +90,48 @@ ego:
   spawn_lanelet_id: 1281
   spawn_s: 10.0
 ```
+
+## Scenario IR (declarative alternative to a Python package)
+
+When the task asks for a **Scenario IR document**, do NOT write Python and do NOT run `scenario-new`.
+Write one YAML file, a `ScenarioDocument` (the format the framework's Scenario Editor saves), and the framework
+compiles it into its own actions/conditions. Docs: `docs/scenario_editor.md`, `docs/logical_scenarios.md`.
+
+- Building blocks: `ir-catalog` lists every action / condition / spawn constraint / binding type;
+  `ir-catalog <type> ...` prints each type's fields (name, kind, default, unit, options).
+  Use only types and field names it prints. Units are as printed (the `speed` condition's `value` is in **m/s**).
+- Check and build: `validate-ir <file.yaml>` (load -> validate -> compile -> lanelet ids -> export package ->
+  install -> tests). Fix the FIRST failure, run again, until `RESULT: PASS`.
+- Run it (only when `carla-status` says UP): `uv run scenario scenario=<id> map=<id>_map`.
+- Every document needs exactly one entity of `kind: ego` with a `goal`. Other vehicles are `kind: vehicle`
+  and stand still unless an action (e.g. `set_speed`) drives them.
+- Conditions are `{type: ..., params: {...}}`; composites (`all`, `any`, `not`, `sticky`, `persistent`) take
+  `children: [...]` instead of params. Actions are `{type, actor, params, trigger}`; without a trigger an action
+  starts immediately. Any pass condition passes the scenario; any fail condition fails it. Always add a
+  `timeout` fail condition. `id`s of nodes are optional.
+
+Minimal shape (ego drives to a goal):
+
+```yaml
+version: 1
+id: my_scenario            # ^[a-z][a-z0-9_]*$, not the name of a built-in scenario
+title: My scenario
+timeout_seconds: 30.0
+map:
+  group: town10hd_opt
+  name: Town10HD_Opt
+  source: "git+https://huggingface.co/datasets/AutowareFoundation/carla-ue5-maps@5058c6683a1077a99aa5fdca5e6ecff9d71fcfb1#autoware_maps/Town10HD_Opt"
+entities:
+- id: ego
+  kind: ego
+  initial_speed_kmh: 10.0
+  spawn: {mode: fixed, lanelet_id: 1281, s: {value: 5.0}}
+  goal: {lanelet_id: 1764}
+actions: []
+assertions:
+  pass:
+  - {type: entity_lane_position, params: {entity: ego, lanelet_id: 1764}}
+  fail:
+  - {type: collision}
+  - {type: timeout, params: {timeout_seconds: 30.0}}
+```

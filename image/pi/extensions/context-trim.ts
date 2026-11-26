@@ -3,16 +3,21 @@
 // long task (skill text + framework sources) overflows mid-run; the overflow
 // compaction then starts after the run and print mode exits before it ends.
 //
-// This hook runs before every LLM call. When the estimated context exceeds
-// PI_TRIM_BUDGET tokens (default 18000), it shortens old tool results (all but
-// the newest PI_TRIM_KEEP, default 4) to their head and tail. It changes only
-// what is sent, not the session. Trimming breaks the server's prefix cache, so
-// it trims all old results at once to make the next trim rare.
+// This hook runs before every LLM call and shortens old tool results to their
+// head and tail. It changes only what is sent, not the session.
+//
+// Prefix-cache friendly: every rewrite of an early message makes the server
+// re-read (prefill) the whole prompt. So the trimmed region only grows in
+// large steps: when the estimate exceeds PI_TRIM_BUDGET (default 20000
+// tokens), every tool result except the newest PI_TRIM_KEEP (default 2) is
+// trimmed and that boundary is remembered. Until the budget is exceeded again
+// the same messages are sent byte-for-byte, and the server's cache hits.
 export default function (pi: any) {
-  const budget = Number(process.env.PI_TRIM_BUDGET ?? "18000");
-  const keep = Number(process.env.PI_TRIM_KEEP ?? "4");
+  const budget = Number(process.env.PI_TRIM_BUDGET ?? "20000");
+  const keep = Number(process.env.PI_TRIM_KEEP ?? "2");
   const HEAD = 600;
   const TAIL = 400;
+  let boundary = 0; // number of tool results (counted from the start) that are trimmed
 
   const textOf = (m: any): string => {
     if (typeof m.content === "string") return m.content;
@@ -20,30 +25,32 @@ export default function (pi: any) {
     return m.content.map((c: any) => (c.type === "text" ? c.text : c.type === "toolCall" ? JSON.stringify(c.arguments ?? {}) : "")).join("");
   };
   // chars/3 overestimates for code; Japanese text is roughly 1 token per char.
-  const estimate = (msgs: any[]) =>
-    msgs.reduce((n, m) => {
-      const t = textOf(m);
-      const cjk = (t.match(/[　-鿿＀-￯]/g) ?? []).length;
-      return n + Math.ceil((t.length - cjk) / 3) + cjk;
-    }, 0);
+  const tokens = (t: string) => {
+    const cjk = (t.match(/[　-鿿＀-￯]/g) ?? []).length;
+    return Math.ceil((t.length - cjk) / 3) + cjk;
+  };
+  const trimmed = (t: string) =>
+    t.length <= HEAD + TAIL + 200
+      ? t
+      : `${t.slice(0, HEAD)}\n[... ${t.length - HEAD - TAIL} chars of this old output trimmed to fit the context; re-run the command if you need them ...]\n${t.slice(-TAIL)}`;
+
+  const apply = (msgs: any[], upto: number) => {
+    let n = 0;
+    for (const m of msgs) {
+      if (m.role !== "toolResult") continue;
+      if (n++ >= upto) break;
+      m.content = [{ type: "text", text: trimmed(textOf(m)) }];
+    }
+  };
+  const estimate = (msgs: any[]) => msgs.reduce((s, m) => s + tokens(textOf(m)), 3000); // + system prompt/tools
 
   pi.on("context", (event: any) => {
     const msgs = event.messages;
-    if (estimate(msgs) + 3000 <= budget) return; // 3000 ~ system prompt + tools
-    const results: number[] = [];
-    msgs.forEach((m: any, i: number) => {
-      if (m.role === "toolResult") results.push(i);
-    });
-    const old = results.slice(0, Math.max(0, results.length - keep));
-    for (const i of old) {
-      const m = msgs[i];
-      const t = textOf(m);
-      if (t.length <= HEAD + TAIL + 200) continue;
-      const cut = t.length - HEAD - TAIL;
-      m.content = [{
-        type: "text",
-        text: `${t.slice(0, HEAD)}\n[... ${cut} chars of this old output trimmed to fit the context; re-run the command if you need them ...]\n${t.slice(-TAIL)}`,
-      }];
+    const results = msgs.filter((m: any) => m.role === "toolResult").length;
+    apply(msgs, boundary);
+    if (estimate(msgs) > budget) {
+      boundary = Math.max(boundary, results - keep);
+      apply(msgs, boundary);
     }
     return { messages: msgs };
   });

@@ -127,6 +127,31 @@ Get a finished package out with
 `openshell sandbox download scenario-author /sandbox/workspace/<pkg> ./out`, then record it on the host:
 `scripts/run-in-carla.sh ./out/<pkg> <scenario> ./run_out` (chase-cam video in `run_out/carla.mp4`).
 
+## Scenario IR instead of Python
+
+The framework's Scenario Editor stores a scenario as a declarative **Scenario IR** document (`ScenarioDocument`
+YAML) and compiles it into its own actions and conditions. The sandbox lets the agent write one directly:
+
+* `ir-catalog [type ...]` lists the registered action / condition / constraint / binding types and their fields
+  (generated from the installed framework).
+* `validate-ir <doc.yaml>` loads, validates and compiles the document, checks every lanelet id against the map,
+  exports the package (`export_package`, offline), installs it and runs its tests. The package then runs with
+  `uv run scenario scenario=<id> map=<id>_map`.
+* The direction is IR -> package only: the framework has no way to turn a Python scenario into IR.
+
+Same three Town10 scenarios, same seeds, image before the cache fix below. The grader ran every validated
+scenario once on CARLA:
+
+| Task | IR document | Python package |
+|---|---|---|
+| parked car | 3/3, CARLA 3/3, 94–178 s, 11–21 turns | 3/3, CARLA 3/3, 401–800 s, 23–43 turns |
+| cut-in from the left | 3/3, CARLA 3/3, 243–419 s, 27–34 turns | 3/3, CARLA 3/3, 190–406 s, 10–25 turns |
+| speed cap | 3/3, CARLA 3/3, 24–28 s, 4–6 turns (*) | 3/3, CARLA 3/3, 116–202 s, 12–14 turns |
+
+(*) The minimal IR example in `AGENTS.md` is almost this scenario, so this row overstates the IR's advantage.
+
+`python3 eval/run_eval.py --suite ir` runs the IR tasks. `--grade-carla` adds the CARLA run to the Python suites.
+
 ## Skills and CARLA from inside the sandbox
 
 All six skills shipped by the framework (`write-scenario`, `scenario-writing`, `debug-concrete-scenario`,
@@ -151,8 +176,11 @@ CARLA_RENDER=0 scripts/carla-up.sh     # -nullrhi: TrafficManager ego, no sensor
 
 pi checks for auto-compaction only when a prompt's run ends, so a long `pi -p` task overflows the 32k window
 mid-run. `image/pi/extensions/context-trim.ts` trims old tool results before each LLM call
-(`PI_TRIM_BUDGET`, default 18000 tokens). Without it, all four skill closed-loop trials died with HTTP 400. With it,
-all four reached a PASSED CARLA run.
+(`PI_TRIM_BUDGET`, default 20000 tokens). Without it, all four skill closed-loop trials died with HTTP 400. With it,
+all four reached a PASSED CARLA run. The first version trimmed a sliding window, which changed the start of the
+prompt on every turn. Strata's prefix cache then missed and re-read about 20k tokens per turn: one cut-in trial
+prefilled 362k prompt tokens to write 3.9k. The trimmed region now grows only in steps and stays fixed in between.
+The re-measurement with this version is pending.
 
 ## Layout
 
@@ -162,12 +190,12 @@ all four reached a PASSED CARLA run.
 | `gateway/` | upstream OpenShell docker deploy (config v2) + Linux `extra_hosts`; data in `/var/lib/openshell-scenario-sandbox` |
 | `image/Dockerfile` | the sandbox image |
 | `image/workspace/AGENTS.md` | the agent's instructions (workflow, Codon rules learned the hard way) |
-| `image/workspace/tools/` | `lanelet-info`, `validate-scenario`, `carla-status` |
+| `image/workspace/tools/` | `lanelet-info`, `validate-scenario`, `carla-status`, `validate-ir`, `ir-catalog` |
 | `image/pi/` | pi provider/model config pointing at Strata; extensions `sampling.ts` (seeded sampling) and `context-trim.ts` |
 | `policy/sandbox-policy.yaml` | filesystem/process policy + the `carla` TCP rule |
 | `policy/strata-profile.yaml` | provider profile: the LLM egress |
 | `runner/chase_cam.py` | host-side chase camera used by `scripts/run-in-carla.sh` |
-| `eval/` | tasks (English, Japanese, skill closed loop), runner, demo recorder/renderer |
+| `eval/` | tasks (English, Japanese, skill closed loop, Scenario IR), runner, demo recorder/renderer |
 | `media/` | the GIFs above |
 
 ## Traps hit while building this

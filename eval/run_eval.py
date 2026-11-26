@@ -23,7 +23,8 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from tasks import AUTONOMY, AUTONOMY_JA, JA_TASKS, SKILL_TASKS, TASKS, TOWN10_TASKS  # noqa: E402
+from tasks import (AUTONOMY, AUTONOMY_IR, AUTONOMY_JA, IR_TASKS, JA_TASKS, SKILL_TASKS, TASKS,  # noqa: E402
+                   TOWN10_TASKS)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 VERSION = os.environ.get("AUTOWARE_CARLA_SCENARIO_VERSION", "29.3.11")
@@ -62,8 +63,92 @@ if results:
     r["carla_last_message"] = str(last.get("message"))[:200]
 if len(sys.argv) > 5 and sys.argv[5] == "carla":
     r["success"] = r["success"] and r.get("carla_last_passed", False)
+elif len(sys.argv) > 5 and sys.argv[5] == "grade-carla" and r["validate_pass"]:
+    # Runtime verdict for comparison with the IR suite: the grader runs the scenario once.
+    import os
+    if subprocess.run(["carla-status"], capture_output=True).returncode == 0:
+        subprocess.run(["timeout", "400", "uv", "run", "scenario", f"scenario={scen}/default",
+                        "map=" + os.environ.get("SCENARIO_MAP", "town10hd_opt"), "hydra.run.dir=_eval/grade_run"],
+                       capture_output=True, text=True)
+        res = sorted(pathlib.Path("_eval/grade_run").glob("*_result.json"))
+        r["carla_passed"] = bool(res) and bool(json.loads(res[-1].read_text()).get("passed"))
+        if res:
+            r["carla_message"] = str(json.loads(res[-1].read_text()).get("message"))[:240]
 print(json.dumps(r))
 '''
+
+
+IR_GRADER = r"""
+import json, pathlib, subprocess, sys, yaml
+docp, must_types, expect = pathlib.Path(sys.argv[1]), json.loads(sys.argv[2]), json.loads(sys.argv[3])
+r = {"doc_exists": docp.is_file()}
+v = subprocess.run(["validate-ir", str(docp)], capture_output=True, text=True)
+r["validate_pass"] = v.returncode == 0
+r["validate_tail"] = v.stdout.strip().splitlines()[-12:]
+doc = (yaml.safe_load(docp.read_text()) if docp.is_file() else {}) or {}
+types = set()
+def walk(n):
+    if isinstance(n, dict):
+        if isinstance(n.get("type"), str):
+            types.add(n["type"])
+        for x in n.values():
+            walk(x)
+    elif isinstance(n, list):
+        for x in n:
+            walk(x)
+walk(doc.get("actions")); walk(doc.get("assertions"))
+r["types_used"] = sorted(types)
+r["must_use_missing"] = [t for t in must_types if t not in types]
+ents = doc.get("entities") or []
+ego = next((e for e in ents if e.get("kind") == "ego"), {})
+npc = next((e for e in ents if e.get("kind") == "vehicle"), {})
+def spawn(e, key):
+    sp = (e or {}).get("spawn") or {}
+    val = sp.get(key)
+    return val.get("value") if isinstance(val, dict) else val
+speeds = []
+def find_speed(n):
+    if isinstance(n, dict):
+        if n.get("type") == "speed":
+            speeds.append((n.get("params") or {}).get("value"))
+        for x in n.values():
+            find_speed(x)
+    elif isinstance(n, list):
+        for x in n:
+            find_speed(x)
+find_speed(doc.get("assertions"))
+bad = {}
+for k, want in expect.items():
+    if k == "speed.value_mps":
+        got = speeds[0] if speeds else None
+        ok = got is not None and abs(float(got) - float(want)) <= 0.15
+    else:
+        who, _, key = k.split(".")
+        got = spawn(ego if who == "ego" else npc, key)
+        try:
+            ok = got is not None and float(got) == float(want)
+        except (TypeError, ValueError):
+            ok = False
+    if not ok:
+        bad[k] = got
+r["yaml_mismatch"] = bad
+r["success"] = r["validate_pass"] and not r["must_use_missing"] and not bad
+# Runtime verdict: run the exported package on CARLA (the grader, not the agent).
+up = subprocess.run(["carla-status"], capture_output=True, text=True).returncode == 0
+if r["validate_pass"] and up and doc.get("id"):
+    sid = doc["id"]
+    run = subprocess.run(["timeout", "400", "uv", "run", "scenario", f"scenario={sid}", f"map={sid}_map",
+                          "hydra.run.dir=_eval/grade_run"], capture_output=True, text=True)
+    res = sorted(pathlib.Path("_eval/grade_run").glob("*_result.json"))
+    if res:
+        last = json.loads(res[-1].read_text())
+        r["carla_passed"] = bool(last.get("passed"))
+        r["carla_message"] = str(last.get("message"))[:240]
+    else:
+        r["carla_passed"] = False
+        r["carla_message"] = (run.stdout + run.stderr)[-300:]
+print(json.dumps(r))
+"""
 
 
 def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -117,7 +202,9 @@ def run_trial(task: dict, n: int, outdir: pathlib.Path, args) -> dict:
     if c.returncode != 0:
         return {"task": task["id"], "trial": n, "error": "sandbox create failed: " + c.stderr[-500:]}
     try:
-        if task.get("carla"):
+        if task.get("doc"):
+            prompt = task["prompt"] + "\n\n" + AUTONOMY_IR.format(doc=task["doc"])
+        elif task.get("carla"):
             prompt = task["prompt"]
         elif task["id"].startswith("j"):
             prompt = task["prompt"] + "\n\n" + AUTONOMY_JA.format(pkg=task["pkg"])
@@ -135,10 +222,15 @@ def run_trial(task: dict, n: int, outdir: pathlib.Path, args) -> dict:
             pi_exit = "host timeout"
         wall = time.monotonic() - t0
         print(f"[{task['id']} #{n}] pi finished ({pi_exit}) in {wall:.0f}s; grading", flush=True)
-        g = exec_in(name, "python - " + " ".join(shlex.quote(a) for a in [
-            task["pkg"], task["scenario"], json.dumps(task["must_use"]), json.dumps(task["yaml_expect"]),
-            "carla" if task.get("carla") else "-"])
-            + " <<'PYEOF'\n" + GRADER + "\nPYEOF", timeout=600)
+        if task.get("doc"):
+            g = exec_in(name, "python - " + " ".join(shlex.quote(a) for a in [
+                task["doc"], json.dumps(task["must_types"]), json.dumps(task["expect"])])
+                + " <<'PYEOF'\n" + IR_GRADER + "\nPYEOF", timeout=900)
+        else:
+            g = exec_in(name, "python - " + " ".join(shlex.quote(a) for a in [
+                task["pkg"], task["scenario"], json.dumps(task["must_use"]), json.dumps(task["yaml_expect"]),
+                "carla" if task.get("carla") else ("grade-carla" if args.grade_carla else "-")])
+                + " <<'PYEOF'\n" + GRADER + "\nPYEOF", timeout=600)
         try:
             grade = json.loads(g.stdout.strip().splitlines()[-1])
         except (json.JSONDecodeError, IndexError):
@@ -146,7 +238,10 @@ def run_trial(task: dict, n: int, outdir: pathlib.Path, args) -> dict:
         (tdir / "logs").mkdir()
         (tdir / "package").mkdir()
         sh(["openshell", "sandbox", "download", name, "/sandbox/workspace/_eval", str(tdir / "logs")])
-        sh(["openshell", "sandbox", "download", name, f"/sandbox/workspace/{task['pkg']}", str(tdir / "package")])
+        if task.get("doc"):
+            sh(["openshell", "sandbox", "download", name, "/sandbox/workspace/ir", str(tdir / "package")])
+        else:
+            sh(["openshell", "sandbox", "download", name, f"/sandbox/workspace/{task['pkg']}", str(tdir / "package")])
         ev = next(tdir.joinpath("logs").rglob("pi_events.jsonl"), tdir / "missing")
         stats = summarize_events(ev) if ev.is_file() else {}
         res = {"task": task["id"], "trial": n, "pi_exit": pi_exit, "wall_s": round(wall), **stats, **grade}
@@ -155,6 +250,7 @@ def run_trial(task: dict, n: int, outdir: pathlib.Path, args) -> dict:
               f"missing={res.get('must_use_missing')} yaml={res.get('yaml_mismatch')} "
               f"turns={stats.get('turns')} tools={stats.get('tool_calls')} "
               f"carla_runs={res.get('carla_runs')} carla_last={res.get('carla_last_passed')} "
+              f"carla_grader={res.get('carla_passed')} "
               f"skills={stats.get('skills_read')}", flush=True)
         return res
     finally:
@@ -164,7 +260,7 @@ def run_trial(task: dict, n: int, outdir: pathlib.Path, args) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--suite", choices=["nishishinjuku", "town10", "town10-ja", "skills"], default="town10")
+    ap.add_argument("--suite", choices=["nishishinjuku", "town10", "town10-ja", "skills", "ir"], default="town10")
     ap.add_argument("--tasks", default="")
     ap.add_argument("--trials", type=int, default=1)
     ap.add_argument("--timeout", type=int, default=1800, help="seconds per pi run")
@@ -172,12 +268,14 @@ def main() -> int:
     ap.add_argument("--seed-base", type=int, default=0,
                     help="sample with temperature + per-trial seed (0 = Strata's deterministic decoding)")
     ap.add_argument("--temperature", type=float, default=1.0)
+    ap.add_argument("--grade-carla", action="store_true",
+                    help="Python suites: the grader also runs each validated scenario once on CARLA")
     ap.add_argument("--keep", action="store_true", help="keep sandboxes for inspection")
     args = ap.parse_args()
     outdir = ROOT / "eval/results" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True)
     suite = {"town10": TOWN10_TASKS, "nishishinjuku": TASKS, "town10-ja": JA_TASKS,
-             "skills": SKILL_TASKS}[args.suite]
+             "skills": SKILL_TASKS, "ir": IR_TASKS}[args.suite]
     wanted = args.tasks.split(",") if args.tasks else [t["id"] for t in suite]
     results = [run_trial(t, n, outdir, args) for t in suite if t["id"] in wanted for n in range(1, args.trials + 1)]
     (outdir / "summary.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
